@@ -16,19 +16,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: 'pip'
       
       - name: Install dependencies
         run: pip install yfinance pandas requests
       
       - name: Update stocks
-        id: run
-        env:
-          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
-          API_KEY: ${{ secrets.API_KEY }}
         run: |
           python update_stocks.py
-          echo "done=$(cat updated_stocks.json | python3 -c 'import sys,json;d=json.load(sys.stdin);print(f\"{d[\"stocks_updated\"]}/{d[\"total_stocks\"]} stocks, {d[\"latest_date\"]}\")')" >> $GITHUB_OUTPUT
       
       - name: Upload DB artifact (backup)
         uses: actions/upload-artifact@v4
@@ -42,5 +36,7 @@ jobs:
           git config user.name "Stock Bot"
           git config user.email "bot@stocks.id"
           git add stocks.db updated_stocks.json
-          git commit -m "📈 ${{ steps.run.outputs.done }}" || echo "No changes"
-          git push
+          git diff --cached --quiet || {
+            git commit -m "📈 Stock update $(date +'%Y-%m-%d')"
+            git push
+          }
