@@ -1,1 +1,33 @@
-{"timestamp": "2026-05-25T11:47:22.607893", "latest_date": null, "stocks_updated": 0, "total_stocks": 0, "total_rows": 0, "failed": ["AADI", "AALI", "ABBA", "ABDA", "ABMM", "ACES", "ACRO", "ACST", "ADCP", "ADES", "ADHI", "ADMF", "ADMG", "ADRO", "ADS", "AEON", "AGAR", "AGII", "AGRO", "AGRS", "AIMS", "AISA", "AKRA", "AKSI", "ALDO", "ALKA", "ALMI", "ALTO", "AMAG", "AMIN"], "failed_count": 746}
+{
+  "timestamp": "2026-05-25T12:12:01.503393",
+  "latest_date": "2026-05-25",
+  "stocks_updated": 548,
+  "total_stocks": 548,
+  "total_rows": 10964,
+  "db_size_mb": 0.7,
+  "duration_s": 12,
+  "failed": [
+    "ADS",
+    "AEON",
+    "APOL",
+    "BDEB",
+    "BDPC",
+    "BHTN",
+    "BAEK",
+    "BKRW",
+    "COLS",
+    "BVML",
+    "CRAY",
+    "COMP",
+    "COMM",
+    "CMSA",
+    "DASS",
+    "CGSP",
+    "CGLB",
+    "DCCU",
+    "CKRA",
+    "DECO"
+  ],
+  "failed_count": 197,
+  "rate_limited": false
+}
