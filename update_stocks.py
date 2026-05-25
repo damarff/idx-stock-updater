@@ -121,7 +121,7 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
 def fetch_chart(ticker):
     """Fetch 1 month of OHLCV data for a single ticker via v8 chart API."""
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}.JK?range=1mo&interval=1d"
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}.JK?range=5y&interval=1d"
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     ctx = ssl.create_default_context()
 
