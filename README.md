@@ -1,58 +1,45 @@
 # 📈 IDX Stock Updater
 
-Auto-update 957 IDX stocks daily via **GitHub Actions** + **Yahoo Finance**.
+Auto-update 957 IDX stocks daily.
 
-## How it works
+## Architecture
 
-1. **GitHub Actions** (cron `0 9 * * 1-5`) runs `update_stocks.py`
-2. Downloads current DB from VPS webhook → fetches latest OHLCV from Yahoo Finance
-3. Uploads updated DB back to VPS via webhook  
-4. Also commits to repo + stores as artifact
-
-## Setup
-
-### 1. GitHub Repo
-
-```bash
-# Create repo on GitHub, then:
-git init
-git add .
-git commit -m "Initial"
-git remote add origin https://github.com/YOUR_USER/idx-stock-updater.git
-git push -u origin main
+```
+┌─────────────────────┐     ┌──────────────────────┐
+│  Advan Tab (CachyOS)│     │  VPS (Oracle Cloud)  │
+│                     │     │                      │
+│  Cron 17:15 WITA    │     │  Cron 17:10 WITA     │
+│  └→ yfinance update │     │  └→ yfinance update  │
+│  └→ saves stocks.db │     │     (if rate ok)     │
+│                     │     │                      │
+│                     │     │  Cron 17:30 WITA     │
+│                     │     │  └→ sync from laptop │
+│                     │     │     (via Tailscale)  │
+└─────────────────────┘     └──────────────────────┘
+                                     │
+                                     ▼
+                            ~/.hermes/databases/stocks.db
 ```
 
-### 2. GitHub Secrets
-
-Go to Settings → Secrets and variables → Actions → New repository secret:
-
-| Secret | Value |
-|---|---|
-| `WEBHOOK_URL` | `http://YOUR_VPS_IP:8765` |
-| `API_KEY` | `(your API key from webhook server)` |
-
-### 3. Webhook Server (VPS)
+## VPS Setup
 
 ```bash
-# Generate a secure API key
-export STOCK_API_KEY=$(openssl rand -hex 16)
+# Cron sudah terdaftar:
+# 10 9 * * 1-5  → VPS direct update (yfinance)
+# 30 9 * * 1-5  → Sync from laptop (Tailscale fallback)
 
-# Start the server (add to systemd for persistence)
-python3 ~/projects/stock-updater/webhook_server.py
+# Cek log update:
+tail -f ~/projects/stock-updater/update.log
 
-# Or via nohup:
-nohup python3 ~/projects/stock-updater/webhook_server.py > ~/stock_webhook.log 2>&1 &
+# Cek DB status:
+python3 -c "import sqlite3; conn=sqlite3.connect('$HOME/.hermes/databases/stocks.db'); r=conn.execute('SELECT MAX(date),COUNT(DISTINCT symbol),COUNT(*) FROM stock_ohlcv').fetchone(); conn.close(); print(f'Latest: {r[0]}, Stocks: {r[1]}, Rows: {r[2]:,}')"
 ```
-
-### 4. Test
-
-Trigger the workflow manually from GitHub Actions tab, or wait for the daily cron.
 
 ## Files
 
 | File | Description |
-|---|---|
-| `update_stocks.py` | Main update script |
-| `.github/workflows/update-stocks.yml` | GitHub Actions workflow |
-| `webhook_server.py` | VPS-side receiver |
-| `stocks.db` | SQLite database (auto-generated) |
+|------|-------------|
+| `update_stocks_vps.py` | Main update script (VPS) |
+| `sync_from_laptop.sh` | Sync from CachyOS via Tailscale |
+| `stocks.db` | SQLite database (107MB, 957 stocks) |
+| `updated_stocks.json` | Summary of latest update |
