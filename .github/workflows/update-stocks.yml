@@ -18,7 +18,7 @@ jobs:
           python-version: '3.12'
       
       - name: Install dependencies
-        run: pip install yfinance pandas requests
+        run: pip install yfinance==0.2.43 pandas requests
       
       - name: Update stocks
         run: |
@@ -35,7 +35,7 @@ jobs:
         run: |
           git config user.name "Stock Bot"
           git config user.email "bot@stocks.id"
-          git add stocks.db updated_stocks.json
+          git add -f stocks.db updated_stocks.json
           git diff --cached --quiet || {
             git commit -m "📈 Stock update $(date +'%Y-%m-%d')"
             git push
