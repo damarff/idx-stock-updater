@@ -131,50 +131,48 @@ def main():
     
     # Step 3: Fetch from Yahoo Finance
     rows = []
-    failed = []
-    batch_size = 5
+    failed = []    
+    batch_size = 50
     total_batches = (len(tickers) + batch_size - 1) // batch_size
     today_str = datetime.now().strftime('%Y-%m-%d')
-    
+
     for i in range(0, len(tickers), batch_size):
         batch = tickers[i:i+batch_size]
         symbols = [f"{t}.JK" for t in batch]
-        
+
         try:
-            data = yf.download(symbols, period="1mo", interval="1d", progress=False, auto_adjust=False, threads=False, timeout=15)
-            
+            data = yf.download(symbols, period="1mo", interval="1d", progress=False, auto_adjust=False, group_by='ticker')
+
             if data is None or data.empty:
                 failed.extend(batch)
                 continue
-            
+
             for t, sym in zip(batch, symbols):
                 try:
-                    if 'Close' in data.columns.names:
-                        close = data['Close'][sym]
-                        open_ = data['Open'][sym]
-                        high = data['High'][sym]
-                        low = data['Low'][sym]
-                        vol = data['Volume'][sym]
-                        
-                        for date_idx in close.dropna().index:
-                            date_str = date_idx.strftime('%Y-%m-%d')
-                            c = float(close[date_idx])
-                            o = float(open_[date_idx]) if pd.notna(open_.get(date_idx)) else c
-                            h = float(high[date_idx]) if pd.notna(high.get(date_idx)) else c
-                            l = float(low[date_idx]) if pd.notna(low.get(date_idx)) else c
-                            v = int(vol[date_idx]) if pd.notna(vol.get(date_idx)) else 0
-                            rows.append((t, date_str, o, h, l, c, v))
-                    else:
+                    if sym not in data.columns.levels[1] if hasattr(data.columns, 'levels') else sym not in data.columns:
                         failed.append(t)
+                        continue
+                    close = data['Close'][sym] if hasattr(data.columns, 'levels') else data[sym]['Close']
+                    open_ = data['Open'][sym] if hasattr(data.columns, 'levels') else data[sym]['Open']
+                    high = data['High'][sym] if hasattr(data.columns, 'levels') else data[sym]['High']
+                    low = data['Low'][sym] if hasattr(data.columns, 'levels') else data[sym]['Low']
+                    vol = data['Volume'][sym] if hasattr(data.columns, 'levels') else data[sym]['Volume']
+
+                    for date_idx in close.dropna().index:
+                        date_str = date_idx.strftime('%Y-%m-%d')
+                        c = float(close[date_idx])
+                        o = float(open_[date_idx]) if pd.notna(open_.get(date_idx)) else c
+                        h = float(high[date_idx]) if pd.notna(high.get(date_idx)) else c
+                        l = float(low[date_idx]) if pd.notna(low.get(date_idx)) else c
+                        v = int(vol[date_idx]) if pd.notna(vol.get(date_idx)) else 0
+                        rows.append((t, date_str, o, h, l, c, v))
                 except Exception:
                     failed.append(t)
-        except Exception as e:
+        except Exception:
             failed.extend(batch)
-        
-        if (i // batch_size + 1) % 10 == 0:
+
+        if (i // batch_size + 1) % 5 == 0:
             print(f"  [{i//batch_size + 1}/{total_batches}] {len(set(r[0] for r in rows))} done, {len(failed)} failed")
-        
-        time.sleep(0.3)
     
     stocks_updated = len(set(r[0] for r in rows))
     print(f"\n✅ {stocks_updated} stocks updated, ❌ {len(failed)} failed")
