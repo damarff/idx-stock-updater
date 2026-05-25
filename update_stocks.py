@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """
 Update IDX stock database — runs on GitHub Actions.
-- Downloads current DB from VPS
-- Fetches latest data from Yahoo Finance
-- Uploads updated DB back via webhook
+Uses Yahoo Finance v8 chart API directly (no yfinance dependency).
 """
-import yfinance as yf
-import pandas as pd
-import sqlite3, json, sys, os, time, requests
+import json
+import os
+import sqlite3
+import time
+import urllib.request
+import ssl
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 DB_PATH = "stocks.db"
 OUTPUT_JSON = "updated_stocks.json"
+MAX_WORKERS = 50  # Parallel requests
 
-# Get tickers from the existing DB or use a hardcoded list as fallback
+# 957 IDX tickers
 IDX_TICKERS = [
     "AADI","AALI","ABBA","ABDA","ABMM","ACES","ACRO","ACST","ADCP","ADES",
     "ADHI","ADMF","ADMG","ADRO","ADS","AEON","AGAR","AGII","AGRO","AGRS",
@@ -66,7 +69,7 @@ IDX_TICKERS = [
     "OCTI","OKAS","OLIV","OMED","OMRE","ONIX","ONLY","OPMS","ORIY","OT",
     "PALM","PAMG","PANI","PANS","PAN","PAPA","PARD","PAS","PBD","PBS",
     "PDES","PDPP","PDZ","PEVE","PGAS","PGEO","PGLI","PGUN","PIAA","PID",
-    "PIL","PINA","PIN","PIPP","PIS","PITA","PKPK","PKP","PLAN","PLAS",
+    "PINA","PINS","PIPP","PIS","PITA","PKPK","PKP","PLAN","PLAS",
     "PLIN","PNBN","PNBS","PNIN","PNLF","PNSE","POLL","POLY","POOL","POWR",
     "PPGL","PPRE","PPRO","PPSI","PRAS","PRDA","PRIM","PRMA","PRTS","PSAB",
     "PSDN","PSGO","PSKT","PSMI","PTIS","PTPP","PTRO","PUDP","PURA","PURE",
@@ -92,144 +95,142 @@ IDX_TICKERS = [
     "YULE","ZBRA","ZEUS","ZINC","ZONE","ZRKP"
 ]
 
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+
+def fetch_chart(ticker):
+    """Fetch 1 month of OHLCV data for a single ticker via v8 chart API."""
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}.JK?range=1mo&interval=1d"
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    ctx = ssl.create_default_context()
+
+    try:
+        resp = urllib.request.urlopen(req, context=ctx, timeout=15)
+        data = json.loads(resp.read().decode())
+
+        result = data.get("chart", {}).get("result")
+        if not result:
+            return None
+
+        timestamps = result[0].get("timestamp", [])
+        quotes = result[0].get("indicators", {}).get("quote", [{}])[0]
+
+        rows = []
+        for i, ts in enumerate(timestamps):
+            close = quotes.get("close", [None])[i]
+            if close is None:
+                continue
+            date_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+            o = quotes.get("open", [None])[i] or close
+            h = quotes.get("high", [None])[i] or close
+            l = quotes.get("low", [None])[i] or close
+            v = quotes.get("volume", [None])[i] or 0
+            rows.append((date_str, o, h, l, close, int(v)))
+
+        return rows if rows else None
+    except Exception as e:
+        err = str(e)
+        if "429" in err:
+            return "RATE_LIMITED"
+        return None
+
+
 def main():
+    start = time.time()
     print(f"🚀 Stock Update — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    is_gh = os.environ.get('GITHUB_ACTIONS')
-    print(f"Running on: {'GitHub Actions' if is_gh else 'Local'}")
-    
-    # Step 1: Download current DB if webhook URL is set
-    webhook_base = os.environ.get('WEBHOOK_URL', '').replace('/ingest', '')
-    if webhook_base and is_gh:
-        print(f"⬇️  Downloading current DB from VPS...")
-        try:
-            r = requests.get(f"{webhook_base}/db", timeout=30)
-            if r.status_code == 200:
-                with open(DB_PATH, 'wb') as f:
-                    f.write(r.content)
-                print(f"  ✅ DB downloaded ({len(r.content)/1024/1024:.1f} MB)")
-        except Exception as e:
-            print(f"  ⚠️  Could not download DB: {e}")
-    
-    # Step 2: Get tickers to update
+    print(f"Running on: {'GitHub Actions' if os.environ.get('GITHUB_ACTIONS') else 'Local'}")
+
+    # Determine tickers
     tickers = IDX_TICKERS
-    last_date = None
-    
     if os.path.exists(DB_PATH):
         try:
             conn = sqlite3.connect(DB_PATH)
-            last_date = conn.execute("SELECT MAX(date) FROM stock_ohlcv").fetchone()[0]
             existing = set(r[0] for r in conn.execute("SELECT DISTINCT symbol FROM stock_ohlcv").fetchall())
-            # Use tickers from DB if available
             if existing:
                 tickers = sorted(existing)
             conn.close()
-            print(f"📅 Existing DB: {last_date}, {len(tickers)} stocks")
         except:
-            print(f"  Using default ticker list")
-    
-    print(f"📊 {len(tickers)} stocks to update")
-    
-    # Step 3: Fetch from Yahoo Finance
-    rows = []
-    failed = []    
-    batch_size = 50
-    total_batches = (len(tickers) + batch_size - 1) // batch_size
-    today_str = datetime.now().strftime('%Y-%m-%d')
+            pass
 
-    for i in range(0, len(tickers), batch_size):
-        batch = tickers[i:i+batch_size]
-        symbols = [f"{t}.JK" for t in batch]
+    total = len(tickers)
+    print(f"📊 {total} stocks to fetch\n", flush=True)
 
-        try:
-            data = yf.download(symbols, period="1mo", interval="1d", progress=False, auto_adjust=False, group_by='ticker')
+    # Fetch all tickers in parallel
+    all_rows = []
+    failed = []
+    rate_limited = False
 
-            if data is None or data.empty:
-                failed.extend(batch)
-                continue
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        fut_map = {executor.submit(fetch_chart, t): t for t in tickers}
 
-            for t, sym in zip(batch, symbols):
-                try:
-                    if sym not in data.columns.levels[1] if hasattr(data.columns, 'levels') else sym not in data.columns:
-                        failed.append(t)
-                        continue
-                    close = data['Close'][sym] if hasattr(data.columns, 'levels') else data[sym]['Close']
-                    open_ = data['Open'][sym] if hasattr(data.columns, 'levels') else data[sym]['Open']
-                    high = data['High'][sym] if hasattr(data.columns, 'levels') else data[sym]['High']
-                    low = data['Low'][sym] if hasattr(data.columns, 'levels') else data[sym]['Low']
-                    vol = data['Volume'][sym] if hasattr(data.columns, 'levels') else data[sym]['Volume']
-
-                    for date_idx in close.dropna().index:
-                        date_str = date_idx.strftime('%Y-%m-%d')
-                        c = float(close[date_idx])
-                        o = float(open_[date_idx]) if pd.notna(open_.get(date_idx)) else c
-                        h = float(high[date_idx]) if pd.notna(high.get(date_idx)) else c
-                        l = float(low[date_idx]) if pd.notna(low.get(date_idx)) else c
-                        v = int(vol[date_idx]) if pd.notna(vol.get(date_idx)) else 0
-                        rows.append((t, date_str, o, h, l, c, v))
-                except Exception:
+        done = 0
+        for f in as_completed(fut_map):
+            t = fut_map[f]
+            done += 1
+            try:
+                result = f.result()
+                if result == "RATE_LIMITED":
+                    rate_limited = True
                     failed.append(t)
-        except Exception:
-            failed.extend(batch)
+                elif result:
+                    for r in result:
+                        all_rows.append((t, *r))
+                else:
+                    failed.append(t)
+            except Exception:
+                failed.append(t)
 
-        if (i // batch_size + 1) % 5 == 0:
-            print(f"  [{i//batch_size + 1}/{total_batches}] {len(set(r[0] for r in rows))} done, {len(failed)} failed")
-    
-    stocks_updated = len(set(r[0] for r in rows))
-    print(f"\n✅ {stocks_updated} stocks updated, ❌ {len(failed)} failed")
-    
-    # Step 4: Save to DB
+            if done % 100 == 0 or done == total:
+                elapsed = time.time() - start
+                print(f"  [{done}/{total}] {len(set(r[0] for r in all_rows))} ok, {len(failed)} fail ({elapsed:.0f}s)", flush=True)
+
+    # Save to DB
+    print(f"\n💾 Saving DB...", flush=True)
     conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""CREATE TABLE IF NOT EXISTS stock_ohlcv (
+    conn.execute("""CREATE TABLE IF NOT EXISTS stock_ohlcv (
         symbol TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL, volume INTEGER,
         PRIMARY KEY (symbol, date)
     )""")
-    
-    for row in rows:
+
+    for r in all_rows:
         try:
-            cur.execute("INSERT OR REPLACE INTO stock_ohlcv VALUES (?,?,?,?,?,?,?)", row)
+            conn.execute("INSERT OR REPLACE INTO stock_ohlcv VALUES (?,?,?,?,?,?,?)", r)
         except:
             pass
     conn.commit()
-    
+
     latest = conn.execute("SELECT MAX(date) FROM stock_ohlcv").fetchone()[0]
+    stocks_with_data = conn.execute("SELECT COUNT(DISTINCT symbol) FROM stock_ohlcv WHERE date=?", (latest,)).fetchone()[0]
     total_stocks = conn.execute("SELECT COUNT(DISTINCT symbol) FROM stock_ohlcv").fetchone()[0]
     total_rows = conn.execute("SELECT COUNT(*) FROM stock_ohlcv").fetchone()[0]
     conn.close()
-    
+
+    elapsed = time.time() - start
+    db_size = os.path.getsize(DB_PATH) / 1024 / 1024 if os.path.exists(DB_PATH) else 0
+
+    print(f"\n📅 Latest: {latest}")
+    print(f"📊 {stocks_with_data}/{total_stocks} stocks, {total_rows:,} rows")
+    print(f"💾 {db_size:.0f} MB — ⏱️  {elapsed:.0f}s")
+    print(f"❌ Failed: {len(failed)}", flush=True)
+
     result = {
         "timestamp": datetime.now().isoformat(),
         "latest_date": latest,
-        "stocks_updated": stocks_updated,
+        "stocks_updated": len(set(r[0] for r in all_rows)),
         "total_stocks": total_stocks,
         "total_rows": total_rows,
-        "failed": failed[:30],
+        "db_size_mb": round(db_size, 1),
+        "duration_s": round(elapsed),
+        "failed": failed[:20],
         "failed_count": len(failed),
+        "rate_limited": rate_limited,
     }
-    
-    with open(OUTPUT_JSON, 'w') as f:
-        json.dump(result, f)
-    
-    print(f"\n📅 Latest: {latest}")
-    print(f"📊 {total_stocks} stocks, {total_rows} rows")
-    print(f"💾 Saved {DB_PATH} + {OUTPUT_JSON}")
-    
-    # Step 5: Upload via webhook
-    api_key = os.environ.get('API_KEY', '')
-    if webhook_base and api_key:
-        print(f"📤 Uploading to webhook...")
-        try:
-            with open(DB_PATH, 'rb') as f:
-                r = requests.post(
-                    f"{webhook_base}/ingest",
-                    files={'db': f},
-                    data={'result': json.dumps(result)},
-                    headers={'Authorization': f'Bearer {api_key}'},
-                    timeout=120
-                )
-            print(f"  ✅ Webhook: {r.status_code} — {r.json().get('status', '')}")
-        except Exception as e:
-            print(f"  ❌ Webhook failed: {e}")
+
+    with open(OUTPUT_JSON, "w") as f:
+        json.dump(result, f, indent=2)
+
+    print(f"\n✅ Done!", flush=True)
+
 
 if __name__ == "__main__":
     main()

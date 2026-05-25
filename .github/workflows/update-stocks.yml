@@ -1,0 +1,32 @@
+name: "IDX Stock Daily"
+on:
+  schedule:
+    - cron: '0 9 * * 1-5'
+  workflow_dispatch:
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: "Update stocks"
+      run: python update_stocks.py
+    - name: "Upload artifact"
+      uses: actions/upload-artifact@v4
+      with:
+        name: stocks-db
+        path: stocks.db
+        retention-days: 3
+    - name: "Commit to repo"
+      run: |
+        git config user.name "Stock Bot"
+        git config user.email "bot@stocks.id"
+        git add -f stocks.db updated_stocks.json
+        git diff --cached --quiet || {
+          git commit -m "Stock update $(date +'%Y-%m-%d')"
+          git push
+        }
