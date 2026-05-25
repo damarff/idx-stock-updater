@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-05-25T12:20:39.532107",
+  "timestamp": "2026-05-25T12:21:51.603421",
   "latest_date": "2026-05-25",
   "stocks_updated": 957,
   "total_stocks": 958,
-  "total_rows": 19157,
-  "db_size_mb": 1.2,
-  "duration_s": 15,
+  "total_rows": 1036487,
+  "db_size_mb": 65.4,
+  "duration_s": 20,
   "failed": [],
   "failed_count": 0,
   "rate_limited": false
