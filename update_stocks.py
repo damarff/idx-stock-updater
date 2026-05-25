@@ -140,17 +140,8 @@ def main():
     print(f"🚀 Stock Update — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print(f"Running on: {'GitHub Actions' if os.environ.get('GITHUB_ACTIONS') else 'Local'}")
 
-    # Determine tickers
+    # Determine tickers — always use full IDX list
     tickers = IDX_TICKERS
-    if os.path.exists(DB_PATH):
-        try:
-            conn = sqlite3.connect(DB_PATH)
-            existing = set(r[0] for r in conn.execute("SELECT DISTINCT symbol FROM stock_ohlcv").fetchall())
-            if existing:
-                tickers = sorted(existing)
-            conn.close()
-        except:
-            pass
 
     total = len(tickers)
     print(f"📊 {total} stocks to fetch\n", flush=True)
